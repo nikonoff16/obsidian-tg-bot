@@ -1,8 +1,10 @@
 import os
+from pathlib import Path
 
 from state import update_last_saved_time
 from utils.file_saver import save_attachment, sanitize_filename, save_text_message
 from utils.forward import extract_forward_info
+from utils.kanban import add_card
 from utils.storage_info import storage_report
 
 
@@ -50,6 +52,7 @@ async def save_album(messages, context):
         name_hint=name_hint,
         forwarded_from=forwarded
     )
+    add_card(Path(md_path).stem)
 
     # --- ответ‑квитанция ---
     reply_lines = [f"✅ Сохранено альбомом: `{os.path.basename(md_path)}`"]

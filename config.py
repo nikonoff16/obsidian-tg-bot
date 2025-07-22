@@ -18,3 +18,7 @@ MAX_ATTACHMENT_BYTES = int(MAX_ATTACHMENT_MB * 1024 * 1024)
 
 BOT_MSG_TTL_MIN = int(os.getenv("BOT_MSG_TTL_MIN", "0"))
 BOT_MSG_TTL_SEC = BOT_MSG_TTL_MIN * 60
+
+KANBAN_FILE_REL = os.getenv("KANBAN_FILE_REL", "Kanban/Kanban-tabulo-Por-Enkonduko.md")
+KANBAN_HEADER = os.getenv("KANBAN_HEADER", "## El Telegramo")
+

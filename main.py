@@ -2,13 +2,15 @@ import logging
 import os
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, filters, JobQueue, \
     CallbackContext
 from logging.handlers import RotatingFileHandler
 
-from config import BOT_TOKEN, AUTHORIZED_USER_ID, VAULT_PATH, BOT_MSG_TTL_SEC
+from config import BOT_TOKEN, AUTHORIZED_USER_ID, VAULT_PATH, BOT_MSG_TTL_SEC, KANBAN_HEADER
+from utils.kanban import add_card
 from utils.save_album import save_album
 from utils.file_saver import save_text_message, save_attachment
 from state import update_last_saved_time, get_last_saved_time, load_state
@@ -65,6 +67,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id != AUTHORIZED_USER_ID:
         await update.message.reply_text("🚫 Доступ запрещён.")
+        logging.warning(f"ПОПЫТКА ВХОДА ИЗ ПОД НЕАВТОРИЗОВАННОЙ УЧЕТНОЙ ЗАПИСИ: {user_id}")
         return
 
     message = update.message
@@ -102,8 +105,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             forwarded_from=forwarded_from
         )
         saved_files.append(md_path)
+        add_card(Path(md_path).stem)
 
-    # ❹ Сообщение без текста, но с вложением
+        # ❹ Сообщение без текста, но с вложением
     elif media_link:
         md_path = save_text_message(
             message,
@@ -112,6 +116,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             forwarded_from=forwarded_from
         )
         saved_files.append(md_path)
+        # TODO: одиночные файлы без описания не добавляются в канбан
 
     # ❺ Формируем ответ
     reply_lines: list[str] = []
@@ -167,6 +172,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def _delete_message(context: CallbackContext):
     """Удаляет сообщение, chat_id / msg_id лежат в context.job.data."""
     chat_id, msg_id = context.job.data
+    # TODO: если в сообщении было несколько значений (медиагруппа), то удаляется только одно сообщение. Нужно исправить.
     try:
         await context.bot.delete_message(chat_id, msg_id)
     except Exception:
