@@ -10,6 +10,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, Comma
 from logging.handlers import RotatingFileHandler
 
 from config import BOT_TOKEN, AUTHORIZED_USER_ID, VAULT_PATH, BOT_MSG_TTL_SEC, KANBAN_HEADER
+from utils.auth import require_auth
 from utils.kanban import add_card
 from utils.save_album import save_album
 from utils.file_saver import save_text_message, save_attachment
@@ -61,14 +62,9 @@ async def send_and_auto_delete(orig_msg, text: str,
             data=(orig_msg.chat_id, orig_msg.message_id)
         )
 
-
+@require_auth
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     album_buffer._context = context
-    user_id = update.effective_user.id
-    if user_id != AUTHORIZED_USER_ID:
-        await update.message.reply_text("🚫 Доступ запрещён.")
-        logging.warning(f"ПОПЫТКА ВХОДА ИЗ ПОД НЕАВТОРИЗОВАННОЙ УЧЕТНОЙ ЗАПИСИ: {user_id}")
-        return
 
     message = update.message
     if not message:
@@ -140,12 +136,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+@require_auth
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Приветственное сообщение только для владельца."""
+    await update.message.reply_text(
+        "👋 Бот запущен. Готов сохранять сообщения в Obsidian!"
+    )
 
+@require_auth
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id != AUTHORIZED_USER_ID:
-        await update.message.reply_text("🚫 Доступ запрещён.")
-        return
 
     vault_stats = storage_report(short=False)      # "Хранилище занимает: …\nОставшееся место…"
 
@@ -188,6 +188,7 @@ if __name__ == "__main__":
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     job_queue: JobQueue = app.job_queue
+    app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(MessageHandler(non_command_filter | filters.ATTACHMENT, handle_message))
     app.add_error_handler(error_handler)
