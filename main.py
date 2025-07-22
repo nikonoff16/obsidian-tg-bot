@@ -1,15 +1,18 @@
 import logging
 import os
-from datetime import datetime
-from uuid import uuid4
-from telegram import Update, MessageEntity
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler, filters
+import asyncio
+
+
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, filters
 from logging.handlers import RotatingFileHandler
 
 from config import BOT_TOKEN, AUTHORIZED_USER_ID, VAULT_PATH
+from utils.save_album import save_album
 from utils.file_saver import save_text_message, save_attachment
 from state import update_last_saved_time, get_last_saved_time, load_state
 from utils.forward import extract_forward_info
+from utils.album_buffer import AlbumBuffer
 
 
 # Настройка логгера
@@ -30,7 +33,6 @@ logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user_id = update.effective_user.id
     if user_id != AUTHORIZED_USER_ID:
         await update.message.reply_text("🚫 Доступ запрещён.")
@@ -43,31 +45,63 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     forwarded_from = extract_forward_info(message)
 
-    saved_files = []
+    saved_files: list[str] = []     # пути созданных md‑файлов
+    skipped_notes: list[str] = []   # предупреждения о больших файлах
 
-    media_link = None
+    # ❶ Альбом — складываем и выходим
+    if message.media_group_id:
+        album_buffer.add(message, asyncio.get_running_loop())
+        return
 
-    if message.document or message.photo or message.audio or message.video or message.voice:
-        media_link = await save_attachment(message)
+    # ❷ Одиночное вложение (или его нет)
+    media_link, media_hint, skip_note = await save_attachment(message) if (
+        message.document or message.photo or message.audio
+        or message.video   or message.voice
+    ) else (None, None, None)
 
+    if skip_note:
+        skipped_notes.append(skip_note)
+
+    # ❸ Текст / caption
     if message.text or message.caption:
         text = message.text or message.caption
         if media_link:
-            text = f"{text.strip()}\n\n{media_link[0]}"  # добавляем ссылку в конец текста
-        file_path = save_text_message(message, text, forwarded_from=forwarded_from)
-        saved_files.append(file_path)
+            text = f"{text.strip()}\n\n{media_link}"
+        md_path = save_text_message(
+            message,
+            text,
+            forwarded_from=forwarded_from
+        )
+        saved_files.append(md_path)
 
+    # ❹ Сообщение без текста, но с вложением
     elif media_link:
-        file_path = save_text_message(message, text=media_link[0], name_hint=media_link[1], forwarded_from=forwarded_from)
-        saved_files.append(file_path)
+        md_path = save_text_message(
+            message,
+            media_link,
+            name_hint=media_hint,
+            forwarded_from=forwarded_from
+        )
+        saved_files.append(md_path)
 
-    # Ответ
+    # ❺ Формируем ответ
+    reply_lines: list[str] = []
+
     if saved_files:
         update_last_saved_time()
-        reply = "✅ Сохранено:\n" + "\n".join(f"- `{os.path.basename(f)}`" for f in saved_files)
-        await message.reply_text(reply, parse_mode="Markdown")
-    else:
-        await message.reply_text("⚠️ Нечего сохранять.")
+        reply_lines.append(
+            "✅ Сохранено:\n" +
+            "\n".join(f"- `{os.path.basename(p)}`" for p in saved_files)
+        )
+
+    if skipped_notes:
+        reply_lines.extend(skipped_notes)
+
+    await message.reply_text(
+        "\n".join(reply_lines) or "⚠️ Нечего сохранять.",
+        parse_mode="Markdown"
+    )
+
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -93,6 +127,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 if __name__ == "__main__":
     load_state()
     non_command_filter = filters.TEXT & ~filters.COMMAND
+
+    loop = asyncio.get_event_loop()
+    album_buffer = AlbumBuffer(cb_save=save_album, timeout=1.0)
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("status", status_command))

@@ -1,77 +1,122 @@
-import os, re
+# utils/file_saver.py
+import os
+import re
 import uuid
 from datetime import datetime
-from typing import Optional
 
-from config import NOTES_DIR, IMAGES_DIR
+# Внешние зависимости проекта
+from telegram import Message, File            # типы удобны для IDE, не обязательны
+
+# Локальные модули
+from config import NOTES_DIR, IMAGES_DIR, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_MB
 from utils.formatter import format_markdown_note
-from uuid import uuid4
 
-def sanitize_filename(s: str) -> str:
+
+# characters disallowed on most OS: \ / : * ? " < > | #
+_ILLEGAL = r'[\\/:*?"<>|#\x00-\x1F]'
+
+def timestamp_prefix() -> str:
+    """Возвращает строку вида 20250722-151630."""
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+def sanitize_filename(name: str, max_len: int = 60) -> str:
     """
-    Удаляет или заменяет все символы, которые нельзя использовать в имени файла.
-    Заменяет пробелы и спецсимволы на подчёркивания.
+    Делает строку безопасной для использования как имя файла.
+    - запрещённые символы (\ / : * ? " < > | # и управляющие) удаляются
+    - пробелы/табы -> '_'
+    - повторяющиеся '_' сжимаются
+    - усечение до max_len символов
     """
-    # Убираем запрещённые символы и заменяем пробельные символы на _
-    s = re.sub(r'[\\/:*?"<>|]', '', s)           # Удаляем опасные символы
-    s = re.sub(r'\s+', '_', s)                   # Пробелы и табы → _
-    s = re.sub(r'[_]+', '_', s)                  # Сжимаем повторяющиеся подчёркивания
-    return s.strip('_')[:60]                     # Усечение до 60 символов и обрезка по краям
+    clean = re.sub(_ILLEGAL, '', name)       # убираем опасные
+    clean = re.sub(r'\s+', '_', clean)       # пробелы -> _
+    clean = re.sub(r'[_]+', '_', clean)      # подряд '_' -> одна
+    clean = clean.strip('_')                 # по краям не нужны
+    return clean[:max_len]                   # ограничиваем длину
 
-def get_filename_prefix(message):
-    dt = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    return dt
+# ---------- текстовое сообщение ----------
 
+def save_text_message(message, text: str, name_hint: str | None = None,
+                      forwarded_from: str | None = None) -> str:
+    slug_base = name_hint or text.strip().splitlines()[0][:60]
+    slug = sanitize_filename(slug_base) or uuid.uuid4().hex[:8]
+    fname     = f"{timestamp_prefix()}_{slug or uuid.uuid4().hex}.md"
+    # если slug после чистки пустой, страхуемся UUID‑ом
+    file_title = fname[:-3]
 
-def save_text_message(message, text: str, name_hint: str = None, forwarded_from: Optional[str] = None) -> str:
-    if name_hint:
-        base = name_hint
-    else:
-        base = text.strip().splitlines()[0][:60]
-    first_line = text.strip().splitlines()[0][:60]
-    safe_line = sanitize_filename(base)
-    unique_id = uuid.uuid4().hex
-    base_name = f"{unique_id}_{safe_line}.md"
-    file_title = base_name[:-3]
-
-    content = format_markdown_note(title=file_title, created=datetime.now(), body=text, forwarded_from=forwarded_from)
-    path = os.path.join(NOTES_DIR, base_name)
-
+    content = format_markdown_note(
+        title=file_title,
+        created=datetime.now(),
+        body=text,
+        forwarded_from=forwarded_from
+    )
+    path = os.path.join(NOTES_DIR, fname)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     return path
 
-async def save_attachment(message) -> tuple[str, str]:
-    dt = datetime.now()
-    prefix = get_filename_prefix(message)
+# ---------- вложение ----------
 
-    # Определяем файл и расширение
+# utils/file_saver.py  (фрагмент)
+
+async def save_attachment(message):
+    """
+    Возвращает кортеж:
+      markdown_line  – строка, которую нужно вставить в заметку
+      name_hint      – slug без расширения (для title)
+      skip_info      – None | текст предупреждения для отбивки
+    """
+
+    # 1️⃣  определяем объект файла и его имя / размер
     if message.document:
-        file = await message.document.get_file()
-        filename = message.document.file_name
+        src = message.document
+        tg_file = await src.get_file()
+        orig_name = src.file_name
+        size = src.file_size
     elif message.photo:
-        file = await message.photo[-1].get_file()
-        filename = f"{prefix}_photo.jpg"
+        src = message.photo[-1]
+        tg_file = await src.get_file()
+        orig_name = f"photo_{tg_file.file_id[-6:]}.jpg"
+        size = src.file_size
     elif message.audio:
-        file = await message.audio.get_file()
-        filename = message.audio.file_name or f"{prefix}_audio.mp3"
+        src = message.audio
+        tg_file = await src.get_file()
+        orig_name = src.file_name or "audio.mp3"
+        size = src.file_size
     elif message.video:
-        file = await message.video.get_file()
-        filename = message.video.file_name or f"{prefix}_video.mp4"
+        src = message.video
+        tg_file = await src.get_file()
+        orig_name = src.file_name or "video.mp4"
+        size = src.file_size
     elif message.voice:
-        file = await message.voice.get_file()
-        filename = f"{prefix}_voice.ogg"
+        src = message.voice
+        tg_file = await src.get_file()
+        orig_name = "voice.ogg"
+        size = src.file_size
     else:
-        return None
+        return None, None, None          # неизвестный тип
 
-    unique_id = uuid.uuid4().hex
-    name_part = sanitize_filename(filename.rsplit(".", 1)[0])
-    ext = filename.rsplit(".", 1)[-1].lower()
-    safe_name = f"{unique_id}_{name_part}.{ext}"
+    # 2️⃣  если файл крупнее лимита — не скачиваем
+    if size > MAX_ATTACHMENT_BYTES:
+        mb = size / 1048576
+        placeholder = (
+            f"**`{orig_name}` "
+            f"({mb:.1f} MB > {MAX_ATTACHMENT_MB:.0f} MB, не сохранено)**"
+        )
+        skip_note = (
+            f"⚠️ Пропущено: `{orig_name}` "
+            f"({mb:.1f} MB > {MAX_ATTACHMENT_MB:.0f} MB)"
+        )
 
-    full_path = os.path.join(IMAGES_DIR, safe_name)
-    await file.download_to_drive(full_path)
+        hint        = sanitize_filename(orig_name.rsplit('.', 1)[0])
+        return placeholder, hint, skip_note
 
-    return f"![[Images/{safe_name}]]", name_part
+    # 3️⃣  иначе сохраняем, как раньше
+    ext = orig_name.rsplit('.', 1)[-1].lower()
+    base_slug = sanitize_filename(orig_name.rsplit('.', 1)[0])
+    fname = f"{timestamp_prefix()}_{base_slug}.{ext}"
+    full_path = os.path.join(IMAGES_DIR, fname)
+    await tg_file.download_to_drive(full_path)
 
+    markdown_link = f"![[Images/{fname}]]"
+    return markdown_link, base_slug, None
 
