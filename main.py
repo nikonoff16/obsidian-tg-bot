@@ -13,7 +13,7 @@ from utils.file_saver import save_text_message, save_attachment
 from state import update_last_saved_time, get_last_saved_time, load_state
 from utils.forward import extract_forward_info
 from utils.album_buffer import AlbumBuffer
-
+from utils.storage_info import storage_report
 
 # Настройка логгера
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -97,6 +97,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if skipped_notes:
         reply_lines.extend(skipped_notes)
 
+    if saved_files:  # ← показываем, только если что‑то сохранилось
+        reply_lines.append(f"\n💾 `{storage_report()}`")
+
     await message.reply_text(
         "\n".join(reply_lines) or "⚠️ Нечего сохранять.",
         parse_mode="Markdown"
@@ -109,16 +112,24 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚫 Доступ запрещён.")
         return
 
-    msg = f"📊 *Статус бота:*\n"
-    msg += f"👤 Пользователь: `{user_id}`\n"
-    msg += f"📁 Vault: `{VAULT_PATH}`\n"
-    lst = get_last_saved_time()
-    if lst:
-        msg += f"🕒 Последнее сохранение: `{lst.strftime('%Y-%m-%d %H:%M:%S')}`"
-    else:
-        msg += "🕒 Последнее сохранение: _ещё не было_"
+    vault_stats = storage_report(short=False)      # "Хранилище занимает: …\nОставшееся место…"
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    msg_lines = [
+        "📊 *Статус бота:* Alive",
+        f"👤 Пользователь: `{user_id}`",
+        f"📁 Vault: `{VAULT_PATH}`",
+    ]
+
+    last = get_last_saved_time()
+    if last:
+        msg_lines.append(f"🕒 Последнее сохранение: `{last.strftime('%Y-%m-%d %H:%M:%S')}`")
+    else:
+        msg_lines.append("🕒 Последнее сохранение: _ещё не было_")
+
+    msg_lines.append("")                # пустая строка‑разделитель
+    msg_lines.extend(vault_stats.splitlines())
+
+    await update.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error("Произошла ошибка: %s", context.error)

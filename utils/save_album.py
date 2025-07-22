@@ -2,6 +2,7 @@ import os
 from state import update_last_saved_time
 from utils.file_saver import save_attachment, sanitize_filename, save_text_message
 from utils.forward import extract_forward_info
+from utils.storage_info import storage_report
 
 
 async def save_album(messages):
@@ -52,6 +53,9 @@ async def save_album(messages):
     reply_lines = [f"✅ Сохранено альбомом: `{os.path.basename(md_path)}`"]
     if skipped_notes:
         reply_lines.extend(skipped_notes)
+
+    # 🆕 короткий отчёт о диске
+    reply_lines.append(f"\n💾 `{storage_report()}`")
 
     await messages[0].reply_text(
         "\n".join(reply_lines),
