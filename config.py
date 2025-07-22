@@ -15,3 +15,6 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 
 MAX_ATTACHMENT_MB = float(os.getenv("MAX_ATTACHMENT_MB", "10"))
 MAX_ATTACHMENT_BYTES = int(MAX_ATTACHMENT_MB * 1024 * 1024)
+
+BOT_MSG_TTL_MIN = int(os.getenv("BOT_MSG_TTL_MIN", "0"))
+BOT_MSG_TTL_SEC = BOT_MSG_TTL_MIN * 60

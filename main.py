@@ -1,19 +1,21 @@
 import logging
 import os
 import asyncio
-
+from datetime import datetime, timezone
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, filters
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, filters, JobQueue, \
+    CallbackContext
 from logging.handlers import RotatingFileHandler
 
-from config import BOT_TOKEN, AUTHORIZED_USER_ID, VAULT_PATH
+from config import BOT_TOKEN, AUTHORIZED_USER_ID, VAULT_PATH, BOT_MSG_TTL_SEC
 from utils.save_album import save_album
 from utils.file_saver import save_text_message, save_attachment
 from state import update_last_saved_time, get_last_saved_time, load_state
 from utils.forward import extract_forward_info
 from utils.album_buffer import AlbumBuffer
 from utils.storage_info import storage_report
+
 
 # Настройка логгера
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -32,7 +34,34 @@ logger.setLevel(logging.INFO)
 logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
+async def send_and_auto_delete(orig_msg, text: str,
+                               context: ContextTypes.DEFAULT_TYPE,
+                               *, parse_mode="Markdown"):
+    sent = await orig_msg.reply_text(text, parse_mode=parse_mode)
+
+    if BOT_MSG_TTL_SEC <= 0:
+        return
+
+    jq = context.job_queue    # 👉 гарантированно не None
+
+    jq.run_once(
+        _delete_message,
+        when=BOT_MSG_TTL_SEC,
+        data=(sent.chat_id, sent.message_id)
+    )
+
+    # сколько прошло секунд с момента отправки пользователя
+    msg_age = (datetime.now(timezone.utc) - orig_msg.date).total_seconds()
+    if msg_age < BOT_MSG_TTL_SEC:
+        jq.run_once(
+            _delete_message,
+            when=BOT_MSG_TTL_SEC,
+            data=(orig_msg.chat_id, orig_msg.message_id)
+        )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    album_buffer._context = context
     user_id = update.effective_user.id
     if user_id != AUTHORIZED_USER_ID:
         await update.message.reply_text("🚫 Доступ запрещён.")
@@ -100,8 +129,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if saved_files:  # ← показываем, только если что‑то сохранилось
         reply_lines.append(f"\n💾 `{storage_report()}`")
 
-    await message.reply_text(
+    await send_and_auto_delete(update.message,
         "\n".join(reply_lines) or "⚠️ Нечего сохранять.",
+        context,
         parse_mode="Markdown"
     )
 
@@ -129,10 +159,18 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines.append("")                # пустая строка‑разделитель
     msg_lines.extend(vault_stats.splitlines())
 
-    await update.message.reply_text("\n".join(msg_lines), parse_mode="Markdown")
+    await send_and_auto_delete(update.message, "\n".join(msg_lines), context, parse_mode="Markdown")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error("Произошла ошибка: %s", context.error)
+
+async def _delete_message(context: CallbackContext):
+    """Удаляет сообщение, chat_id / msg_id лежат в context.job.data."""
+    chat_id, msg_id = context.job.data
+    try:
+        await context.bot.delete_message(chat_id, msg_id)
+    except Exception:
+        pass   # сообщение уже удалено или нет прав
 
 
 if __name__ == "__main__":
@@ -140,9 +178,10 @@ if __name__ == "__main__":
     non_command_filter = filters.TEXT & ~filters.COMMAND
 
     loop = asyncio.get_event_loop()
-    album_buffer = AlbumBuffer(cb_save=save_album, timeout=1.0)
+    album_buffer = AlbumBuffer(cb_save=save_album, timeout=1.0, context=None)
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    job_queue: JobQueue = app.job_queue
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(MessageHandler(non_command_filter | filters.ATTACHMENT, handle_message))
     app.add_error_handler(error_handler)

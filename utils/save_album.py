@@ -1,11 +1,13 @@
 import os
+
 from state import update_last_saved_time
 from utils.file_saver import save_attachment, sanitize_filename, save_text_message
 from utils.forward import extract_forward_info
 from utils.storage_info import storage_report
 
 
-async def save_album(messages):
+async def save_album(messages, context):
+    from main import send_and_auto_delete  # локальный импорт устраняет цикл
     """messages: list[telegram.Message] с одним media_group_id."""
     caption = next((m.caption for m in messages if m.caption), "")
     links, hints, skipped_notes = [], [], []
@@ -57,9 +59,6 @@ async def save_album(messages):
     # 🆕 короткий отчёт о диске
     reply_lines.append(f"\n💾 `{storage_report()}`")
 
-    await messages[0].reply_text(
-        "\n".join(reply_lines),
-        parse_mode="Markdown"
-    )
+    await send_and_auto_delete(messages[0], "\n".join(reply_lines), context)
 
     update_last_saved_time()
