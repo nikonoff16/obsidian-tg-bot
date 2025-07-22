@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler
 from config import BOT_TOKEN, AUTHORIZED_USER_ID, VAULT_PATH
 from utils.file_saver import save_text_message, save_attachment
 from state import update_last_saved_time, get_last_saved_time, load_state
+from utils.forward import extract_forward_info
 
 
 # Настройка логгера
@@ -29,12 +30,18 @@ logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     user_id = update.effective_user.id
     if user_id != AUTHORIZED_USER_ID:
         await update.message.reply_text("🚫 Доступ запрещён.")
         return
 
     message = update.message
+    if not message:
+        logging.warning("Обновление не содержит message. Пропущено.")
+        return
+
+    forwarded_from = extract_forward_info(message)
 
     saved_files = []
 
@@ -47,11 +54,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = message.text or message.caption
         if media_link:
             text = f"{text.strip()}\n\n{media_link[0]}"  # добавляем ссылку в конец текста
-        file_path = save_text_message(message, text)
+        file_path = save_text_message(message, text, forwarded_from=forwarded_from)
         saved_files.append(file_path)
 
     elif media_link:
-        file_path = save_text_message(message, text=media_link[0], name_hint=media_link[1])
+        file_path = save_text_message(message, text=media_link[0], name_hint=media_link[1], forwarded_from=forwarded_from)
         saved_files.append(file_path)
 
     # Ответ
@@ -79,6 +86,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.error("Произошла ошибка: %s", context.error)
+
 
 if __name__ == "__main__":
     load_state()
@@ -87,6 +97,7 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(MessageHandler(non_command_filter | filters.ATTACHMENT, handle_message))
+    app.add_error_handler(error_handler)
 
     print("🤖 Бот запущен...")
     app.run_polling()

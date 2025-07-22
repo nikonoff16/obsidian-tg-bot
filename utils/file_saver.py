@@ -1,6 +1,8 @@
 import os, re
 import uuid
 from datetime import datetime
+from typing import Optional
+
 from config import NOTES_DIR, IMAGES_DIR
 from utils.formatter import format_markdown_note
 from uuid import uuid4
@@ -21,7 +23,7 @@ def get_filename_prefix(message):
     return dt
 
 
-def save_text_message(message, text: str, name_hint: str = None) -> str:
+def save_text_message(message, text: str, name_hint: str = None, forwarded_from: Optional[str] = None) -> str:
     if name_hint:
         base = name_hint
     else:
@@ -32,7 +34,7 @@ def save_text_message(message, text: str, name_hint: str = None) -> str:
     base_name = f"{unique_id}_{safe_line}.md"
     file_title = base_name[:-3]
 
-    content = format_markdown_note(title=file_title, created=datetime.now(), body=text)
+    content = format_markdown_note(title=file_title, created=datetime.now(), body=text, forwarded_from=forwarded_from)
     path = os.path.join(NOTES_DIR, base_name)
 
     with open(path, "w", encoding="utf-8") as f:
